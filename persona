@@ -1,0 +1,98 @@
+#!/usr/bin/env perl
+
+use Mojolicious::Lite;
+use Mojo::IOLoop;
+use Mojo::UserAgent;
+
+get "/" => sub {
+	my $self = shift;
+	$self->render('index');	
+};
+
+websocket '/#assertion' => sub {
+	my $self = shift;
+
+	my $ua = new Mojo::UserAgent;
+	my $tx = $ua->post("https://verifier.login.persona.org/verify", => form => { assertion => $self->stash('assertion'), audience => 'http://localhost:5555' });
+	if (my $res = $tx->success) { 
+		say $res->body;
+		Mojo::IOLoop->stream($self->tx->connection)->timeout(300);
+		$self->send($res->body);	
+
+		$self->on(message => sub {
+			my ($self,$msg) = @_;
+			say $msg;
+		});
+	
+		$self->on(finish => sub {
+			my ($self,$code,$reason) = @_;
+			say "socket closed $code: $reason";
+		});
+	} else {
+		my ($err, $code) = $tx->error;
+		say $code ? "$code response: $err" : "Connection error: $err";
+		$self->server_close;
+	}
+};
+
+app->start;
+
+__DATA__
+
+@@ index.html.ep
+<!HTML>
+<head>
+<meta http-equiv="X-UA-Compatible" content="IE=Edge">
+<title>Persona Test Page</title>
+<script src="https://login.persona.org/include.js"></script>
+<style>
+#login {
+	position: absolute;
+	top: 40px;
+	right: 40px;
+	visibility: visible;
+}
+
+#logout {
+	position: absolute;
+	top: 40px;
+	right: 40px;
+	visibility: hidden;
+}
+
+</style>
+</head>
+<body>
+<h1>Login with Persona</h1>
+<button id="login">Login</button>
+<button id="logout">Logout</button>
+<script>
+$ = function(x)  { return document.querySelector(x) }
+$('#login').onclick = function(e) { navigator.id.request(); return true; }
+$('#logout').onclick = function(e) { navigator.id.logout(); return true; }
+
+var ws;
+
+navigator.id.watch({
+	loggedInUser: '',
+	onlogin: function(assertion) { 
+		ws = new WebSocket('ws://' + document.location.host + '/' + assertion);
+		ws.onmessage = function(event) {
+			$('#logout').style.visibility = 'visible';
+			$('#login').style.visibility = 'hidden';
+			console.log("User Loggedin");
+			console.log(event.data);
+		}
+	},
+	onlogout: function() {
+		if (ws) ws.send('logged out');
+		console.log("User Loggedout");
+		$('#login').style.visibility = 'visible';
+		$('#logout').style.visibility = 'hidden';
+	},
+
+});
+
+</script>
+</body>
+</html>
